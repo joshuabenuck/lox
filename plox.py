@@ -27,7 +27,7 @@ class Token(object):
         self.literal = literal
         self.line = line
 
-    def str(self):
+    def __repr__(self):
         return "{} {} {}".format(self.type, self.lexeme, self.literal)
 
 class Scanner(object):
@@ -168,7 +168,8 @@ class Scanner(object):
             self.advance()
 
         text = self.source[self.start:self.current]
-        type = text in self.keywords
+        if text in self.keywords:
+            type = self.keywords[text]
         if type == None:
             type = TokenType.IDENTIFIER
         self.addToken(type)
@@ -238,16 +239,49 @@ class Grouping(Expr):
     def accept(self, visitor):
         return visitor.visitGroupingExpr(self)
 
+class Stmt(object):
+    pass
+
+class Expr(Stmt):
+    def __init__(self, expr):
+        self.expr = expr
+
+    def accept(self, visitor):
+        return visitor.visitExprStmt(self)
+
+class Print(Stmt):
+    def __init__(self, expr):
+        self.expr = expr
+
+    def accept(self, visitor):
+        return visitor.visitPrintStmt(self)
+
 class Parser(object):
     def __init__(self, tokens):
         self.tokens = tokens
         self.current = 0
 
     def parse(self):
-        try:
-            return self.expression()
-        except ParseError:
-            return None
+        statements = []
+        while not self.isAtEnd():
+            statements.append(self.statement())
+        return statements
+
+    def statement(self):
+        if self.match(TokenType.PRINT):
+            return self.printStatement()
+
+        return self.expressionStatement()
+
+    def printStatement(self):
+        value = self.expression()
+        self.consume(TokenType.SEMICOLON, "Expect ';' after value.")
+        return Print(value)
+
+    def expressionStatement(self):
+        expr = self.expression()
+        self.consume(TokenType.SEMICOLON, "Expect ';' after expression.")
+        return Expression(expr)
 
     def expression(self):
         return self.equality()
@@ -411,15 +445,27 @@ class AstPrinter(Visitor):
         return builder
     
 class Interpreter(Visitor):
-    def interpret(self, expr):
+    def interpret(self, stmts):
         try:
-            value = self.evaluate(expr)
-            print(self.stringify(value))
+            for stmt in stmts:
+                self.execute(stmt)
         except RuntimeException as error:
             runtimeError(error)
 
+    def execute(self, stmt):
+        stmt.accept(self)
+
     def evaluate(self, expr):
         return expr.accept(self)
+
+    def visitExpressionStmt(self, stmt):
+        self.evaluate(self.expr)
+        return None
+
+    def visitPrintStmt(self, stmt):
+        value = self.evaluate(stmt.expr)
+        print(self.stringify(value))
+        return None
 
     def visitBinaryExpr(self, expr):
         left = self.evaluate(expr.left)
@@ -547,12 +593,12 @@ def run(source: str):
     tokens = scanner.scanTokens()
 
     parser = Parser(tokens)
-    expr = parser.parse()
+    stmts = parser.parse()
 
     if hadError:
         return
 
-    interpreter.interpret(expr)
+    interpreter.interpret(stmts)
 
 def error(token, message):
     if token.type == TokenType.EOF:
