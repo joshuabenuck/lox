@@ -4,7 +4,7 @@ from enum import Enum
 TokenType = Enum('TokenType', 
     # Single character tokens
     'LEFT_PAREN,RIGHT_PAREN,LEFT_BRACE,RIGHT_BRACE,'
-    'COMMAN,DOT,MINUS,PLUS,SEMICOLON,SLASH,STAR,'
+    'COMMA,DOT,MINUS,PLUS,SEMICOLON,SLASH,STAR,'
 
     # One or two character tokens
     'BANG,BANG_EQUAL,EQUAL,EQUAL_EQUAL,'
@@ -258,6 +258,13 @@ class Grouping(Expr):
 class Stmt(object):
     pass
 
+class Block(Stmt):
+    def __init__(self, stmts):
+        self.stmts = stmts
+
+    def accept(self, visitor):
+        return visitor.visitBlockStmt(self)
+
 class Expression(Stmt):
     def __init__(self, expr):
         self.expr = expr
@@ -304,6 +311,9 @@ class Parser(object):
     def statement(self):
         if self.match(TokenType.PRINT):
             return self.printStatement()
+        if self.match(TokenType.LEFT_BRACE):
+            # wrapped here so block can be reused to parse function bodies
+            return Block(self.block())
 
         return self.expressionStatement()
 
@@ -326,6 +336,14 @@ class Parser(object):
         expr = self.expression()
         self.consume(TokenType.SEMICOLON, "Expect ';' after expression.")
         return Expression(expr)
+
+    def block(self):
+        statements = []
+        while not self.check(TokenType.RIGHT_BRACE) and not self.isAtEnd():
+            statements.append(self.declaration())
+        self.consume(TokenType.RIGHT_BRACE, "Expect '}' after block.")
+
+        return statements
 
     def expression(self):
         return self.assignment()
@@ -458,7 +476,7 @@ class Parser(object):
         self.advance()
 
         while not self.isAtEnd():
-            if self.previous().type == TokenTYPE.SEMICOLON:
+            if self.previous().type == TokenType.SEMICOLON:
                 return
             if self.peek().type in [
                 TokenType.CLASS,
@@ -519,6 +537,20 @@ class Interpreter(Visitor):
 
     def execute(self, stmt):
         stmt.accept(self)
+
+    def executeBlock(self, stmts, environment):
+        previous = self.environment
+        try:
+            self.environment = environment
+
+            for stmt in stmts:
+                self.execute(stmt)
+        finally:
+            self.environment = previous
+
+    def visitBlockStmt(self, stmt):
+        self.executeBlock(stmt.stmts, Environment(self.environment))
+        return None
 
     def evaluate(self, expr):
         return expr.accept(self)
@@ -653,18 +685,26 @@ class RuntimeException(Exception):
         self.token = token
 
 class Environment(object):
-    def __init__(self):
+    def __init__(self, enclosing=None):
         self.values = {}
+        self.enclosing = enclosing
 
     def get(self, name):
         if name.lexeme in self.values:
             return self.values[name.lexeme]
+
+        if self.enclosing:
+            return self.enclosing.get(name)
 
         return RuntimeException(name, "Undefined variable '{}'".format(name.lexeme))
 
     def assign(self, name, value):
         if name.lexeme in self.values:
             self.values[name.lexeme] = value
+            return
+
+        if self.enclosing:
+            self.enclosing.assign(name, value)
             return
 
         raise RuntimeException(name, "Undefined variable '{}'".format(name.lexeme))
@@ -724,6 +764,7 @@ if __name__ == "__main__":
     global interpreter
 
     hadError = False
+    hadRuntimeError = False
     interpreter = Interpreter()
 
     if len(sys.argv) > 2:
@@ -738,7 +779,7 @@ if __name__ == "__main__":
             )
             print(AstPrinter().print(expr))
             sys.exit(0)
-        runFile(sys.argv[0])
+        runFile(sys.argv[1])
     else:
         runPrompt()
 
