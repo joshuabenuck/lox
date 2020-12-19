@@ -168,6 +168,7 @@ class Scanner(object):
             self.advance()
 
         text = self.source[self.start:self.current]
+        type = None
         if text in self.keywords:
             type = self.keywords[text]
         if type == None:
@@ -225,6 +226,13 @@ class Unary(Expr):
     def accept(self, visitor):
         return visitor.visitUnaryExpr(self)
 
+class Variable(Expr):
+    def __init__(self, name):
+        self.name = name
+
+    def accept(self, visitor):
+        return visitor.visitVariableExpr(self)
+
 class Literal(Expr):
     def __init__(self, value):
         self.value = value
@@ -256,6 +264,14 @@ class Print(Stmt):
     def accept(self, visitor):
         return visitor.visitPrintStmt(self)
 
+class Var(Stmt):
+    def __init__(self, name, initializer):
+        self.name = name
+        self.initializer = initializer
+
+    def accept(self, visitor):
+        return visitor.visitVarStmt(self)
+
 class Parser(object):
     def __init__(self, tokens):
         self.tokens = tokens
@@ -264,8 +280,18 @@ class Parser(object):
     def parse(self):
         statements = []
         while not self.isAtEnd():
-            statements.append(self.statement())
+            statements.append(self.declaration())
         return statements
+
+    def declaration(self):
+        try:
+            if self.match(TokenType.VAR):
+                return self.varDeclaration()
+
+            return self.statement()
+        except ParseError as error:
+            self.synchronize()
+            return None
 
     def statement(self):
         if self.match(TokenType.PRINT):
@@ -277,6 +303,16 @@ class Parser(object):
         value = self.expression()
         self.consume(TokenType.SEMICOLON, "Expect ';' after value.")
         return Print(value)
+
+    def varDeclaration(self):
+        name = self.consume(TokenType.IDENTIFIER, "Expect variable name.");
+
+        initializer = None
+        if self.match(TokenType.EQUAL):
+            initializer = self.expression()
+
+        self.consume(TokenType.SEMICOLON, "Expect ';' after variable declaration.")
+        return Var(name, initializer)
 
     def expressionStatement(self):
         expr = self.expression()
@@ -345,6 +381,9 @@ class Parser(object):
 
         if self.match(TokenType.NUMBER, TokenType.STRING):
             return Literal(self.previous().literal)
+
+        if self.match(TokenType.IDENTIFIER):
+            return Variable(self.previous())
 
         if self.match(TokenType.LEFT_PAREN):
             expr = self.expression()
@@ -445,6 +484,9 @@ class AstPrinter(Visitor):
         return builder
     
 class Interpreter(Visitor):
+    def __init__(self):
+        self.environment = Environment()
+
     def interpret(self, stmts):
         try:
             for stmt in stmts:
@@ -465,6 +507,14 @@ class Interpreter(Visitor):
     def visitPrintStmt(self, stmt):
         value = self.evaluate(stmt.expr)
         print(self.stringify(value))
+        return None
+
+    def visitVarStmt(self, stmt):
+        value = None
+        if stmt.initializer != None:
+            value = self.evaluate(stmt.initializer)
+
+        self.environment.define(stmt.name.lexeme, value)
         return None
 
     def visitBinaryExpr(self, expr):
@@ -525,6 +575,9 @@ class Interpreter(Visitor):
         # Unreachable
         return None
 
+    def visitVariableExpr(self, expr):
+        return self.environment.get(expr.name)
+
     def checkNumberOperand(self, operator, operand):
         if type(operand) == type(0.0):
             return
@@ -570,6 +623,19 @@ class RuntimeException(Exception):
     def __init__(self, token, message):
         super.__init__(message)
         self.token = token
+
+class Environment(object):
+    def __init__(self):
+        self.values = {}
+
+    def get(self, name):
+        if name.lexeme in self.values:
+            return self.values[name.lexeme]
+
+        return RuntimeException(name, "Undefined variable '{}'".format(name.lexeme))
+
+    def define(self, name, value):
+        self.values[name] = value
 
 def runFile(path: str):
     global hadError, hadRuntimeError
