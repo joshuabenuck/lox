@@ -209,6 +209,14 @@ class Scanner(object):
 class Expr(object):
     pass
 
+class Assign(Expr):
+    def __init__(self, name, value):
+        self.name = name
+        self.value = value
+
+    def accept(self, visitor):
+        return visitor.visitAssignExpr(self)
+
 class Binary(Expr):
     def __init__(self, left, operator, right):
         self.left = left
@@ -250,12 +258,12 @@ class Grouping(Expr):
 class Stmt(object):
     pass
 
-class Expr(Stmt):
+class Expression(Stmt):
     def __init__(self, expr):
         self.expr = expr
 
     def accept(self, visitor):
-        return visitor.visitExprStmt(self)
+        return visitor.visitExpressionStmt(self)
 
 class Print(Stmt):
     def __init__(self, expr):
@@ -320,7 +328,22 @@ class Parser(object):
         return Expression(expr)
 
     def expression(self):
-        return self.equality()
+        return self.assignment()
+
+    def assignment(self):
+        expr = self.equality()
+
+        if self.match(TokenType.EQUAL):
+            equals = self.previous()
+            value = self.assignment()
+
+            if type(expr) == Variable:
+                name = expr.name
+                return Assign(name, value)
+
+            error(equals, "Invalid assignment target.")
+
+        return expr
 
     def equality(self):
         expr = self.comparison()
@@ -501,7 +524,7 @@ class Interpreter(Visitor):
         return expr.accept(self)
 
     def visitExpressionStmt(self, stmt):
-        self.evaluate(self.expr)
+        self.evaluate(stmt.expr)
         return None
 
     def visitPrintStmt(self, stmt):
@@ -516,6 +539,11 @@ class Interpreter(Visitor):
 
         self.environment.define(stmt.name.lexeme, value)
         return None
+
+    def visitAssignExpr(self, expr):
+        value = self.evaluate(expr.value)
+        self.environment.assign(expr.name, value)
+        return value
 
     def visitBinaryExpr(self, expr):
         left = self.evaluate(expr.left)
@@ -633,6 +661,13 @@ class Environment(object):
             return self.values[name.lexeme]
 
         return RuntimeException(name, "Undefined variable '{}'".format(name.lexeme))
+
+    def assign(self, name, value):
+        if name.lexeme in self.values:
+            self.values[name.lexeme] = value
+            return
+
+        raise RuntimeException(name, "Undefined variable '{}'".format(name.lexeme))
 
     def define(self, name, value):
         self.values[name] = value
