@@ -248,6 +248,15 @@ class Literal(Expr):
     def accept(self, visitor):
         return visitor.visitLiteralExpr(self)
 
+class Logical(Expr):
+    def __init__(self, left, operator, right):
+        self.left = left
+        self.operator = operator
+        self.right = right
+
+    def accept(self, visitor):
+        return visitor.visitLogicalExpr(self)
+
 class Grouping(Expr):
     def __init__(self, expr):
         self.expr = expr
@@ -272,6 +281,15 @@ class Expression(Stmt):
     def accept(self, visitor):
         return visitor.visitExpressionStmt(self)
 
+class If(Stmt):
+    def __init__(self, condition, thenBranch, elseBranch):
+        self.condition = condition
+        self.thenBranch = thenBranch
+        self.elseBranch = elseBranch
+
+    def accept(self, visitor):
+        return visitor.visitIfStmt(self)
+
 class Print(Stmt):
     def __init__(self, expr):
         self.expr = expr
@@ -286,6 +304,14 @@ class Var(Stmt):
 
     def accept(self, visitor):
         return visitor.visitVarStmt(self)
+
+class While(Stmt):
+    def __init__(self, condition, body):
+        self.condition = condition
+        self.body = body
+
+    def accept(self, visitor):
+        return visitor.visitWhileStmt(self)
 
 class Parser(object):
     def __init__(self, tokens):
@@ -309,13 +335,67 @@ class Parser(object):
             return None
 
     def statement(self):
+        if self.match(TokenType.FOR):
+            return self.forStatement()
+        if self.match(TokenType.IF):
+            return self.ifStatement()
         if self.match(TokenType.PRINT):
             return self.printStatement()
+        if self.match(TokenType.WHILE):
+            return self.whileStatement()
         if self.match(TokenType.LEFT_BRACE):
             # wrapped here so block can be reused to parse function bodies
             return Block(self.block())
 
         return self.expressionStatement()
+
+    def forStatement(self):
+        self.consume(TokenType.LEFT_PAREN, "Expect '(' after 'for'.")
+
+        initializer = None
+        if self.match(TokenType.SEMICOLON):
+            initializer = None
+        elif self.match(TokenType.VAR):
+            initializer = self.varDeclaration()
+        else:
+            initializer = self.expressionStatement()
+
+        condition = None
+        if not self.check(TokenType.SEMICOLON):
+            condition = self.expression()
+        self.consume(TokenType.SEMICOLON, "Expect ';' after loop condition.")
+
+        increment = None
+        if not self.check(TokenType.RIGHT_PAREN):
+            increment = self.expression()
+        self.consume(TokenType.RIGHT_PAREN, "Expect ')' after for clauses.")
+
+        body = self.statement()
+
+        if increment != None:
+            body = Block([body, Expression(increment)])
+
+        if condition == None:
+            condition = Literal(True)
+
+        body = While(condition, body)
+
+        if initializer != None:
+            body = Block([initializer, body])
+
+        return body
+
+    def ifStatement(self):
+        self.consume(TokenType.LEFT_PAREN, "Expect '(' after 'if'.")
+        condition = self.expression()
+        self.consume(TokenType.LEFT_PAREN, "Expect ')' after if condition.")
+
+        thenBranch = self.statement()
+        elseBranch = None
+        if self.match(TokenType.ELSE):
+            elseBranch = self.statement()
+
+        return If(condition, thenBranch, elseBranch)
 
     def printStatement(self):
         value = self.expression()
@@ -331,6 +411,15 @@ class Parser(object):
 
         self.consume(TokenType.SEMICOLON, "Expect ';' after variable declaration.")
         return Var(name, initializer)
+
+    def whileStatement(self):
+        self.consume(TokenType.LEFT_PAREN, "Expect '(' after 'while'.")
+        condition = self.expression()
+        self.consume(TokenType.LEFT_PAREN, "Expect ')' after condition.")
+
+        body = self.statement()
+
+        return While(condition, body)
 
     def expressionStatement(self):
         expr = self.expression()
@@ -349,7 +438,7 @@ class Parser(object):
         return self.assignment()
 
     def assignment(self):
-        expr = self.equality()
+        expr = self.orExpression()
 
         if self.match(TokenType.EQUAL):
             equals = self.previous()
@@ -360,6 +449,26 @@ class Parser(object):
                 return Assign(name, value)
 
             error(equals, "Invalid assignment target.")
+
+        return expr
+
+    def orExpression(self):
+        expr = self.andExpression()
+
+        while self.match(TokenType.OR):
+            operator = self.previous()
+            right = self.andExpression()
+            expr = Logical(expr, operator, right)
+
+        return expr
+
+    def andExpression(self):
+        expr = self.equality()
+
+        while self.match(TokenType.OR):
+            operator = self.previous()
+            right = self.equality()
+            expr = Logical(expr, operator, right)
 
         return expr
 
@@ -559,6 +668,13 @@ class Interpreter(Visitor):
         self.evaluate(stmt.expr)
         return None
 
+    def visitIfStmt(self, stmt):
+        if self.isTruthy(self.evaluate(stmt.condition)):
+            self.execute(stmt.thenBranch)
+        elif stmt.elseBranch != None:
+            self.execute(stmt.elseBranch)
+        return None
+
     def visitPrintStmt(self, stmt):
         value = self.evaluate(stmt.expr)
         print(self.stringify(value))
@@ -570,6 +686,12 @@ class Interpreter(Visitor):
             value = self.evaluate(stmt.initializer)
 
         self.environment.define(stmt.name.lexeme, value)
+        return None
+
+    def visitWhileStmt(self, stmt):
+        while self.isTruthy(self.evaluate(stmt.condition)):
+            self.execute(stmt.body)
+
         return None
 
     def visitAssignExpr(self, expr):
@@ -622,6 +744,19 @@ class Interpreter(Visitor):
 
     def visitLiteralExpr(self, expr):
         return expr.value
+
+    def visitLogicalExpr(self, expr):
+        left = self.evaluate(expr.left)
+        right = self.evaluate(expr.right)
+
+        if expr.operator.type == TokenType.OR:
+            if self.isTruthy(left):
+                return left
+        else:
+            if not self.Truthy(left):
+                return left
+
+        self.evaluate(expr.right)
 
     def visitUnaryExpr(self, expr):
         right = self.evaluate(expr.right)
