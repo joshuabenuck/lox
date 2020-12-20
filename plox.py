@@ -1,4 +1,4 @@
-import sys
+import sys, time
 from enum import Enum
 
 TokenType = Enum('TokenType', 
@@ -225,6 +225,15 @@ class Binary(Expr):
 
     def accept(self, visitor):
         return visitor.visitBinaryExpr(self)
+
+class Call(Expr):
+    def __init__(self, callee, paren, arguments):
+        self.callee = callee
+        self.paren = paren
+        self.arguments = arguments
+
+    def accept(self, visitor):
+        return visitor.visitCallExpr(self)
 
 class Unary(Expr):
     def __init__(self, operator, right):
@@ -519,7 +528,31 @@ class Parser(object):
             right = self.unary()
             return Unary(operator, right)
 
-        return self.primary()
+        return self.call()
+
+    def finishCall(self, callee):
+        arguments = []
+        if not self.check(TokenType.RIGHT_PAREN):
+            while True:
+                if len(arguments) >= 255:
+                    self.error(self.peek(), "Can't have more than 255 arguments.")
+                arguments.append(self.expression)
+                if not self.match(TokenType.COMMA):
+                    break
+
+        paren = self.consume(TokenType.RIGHT_PAREN, "Expect ')' after arguments.")
+        return Call(callee, paren, arguments)
+
+    def call(self):
+        expr = self.primary()
+
+        while True:
+            if self.match(TokenType.LEFT_PAREN):
+                expr = self.finishCall(expr)
+            else:
+                break
+
+        return expr
 
     def primary(self):
         if self.match(TokenType.FALSE):
@@ -635,7 +668,16 @@ class AstPrinter(Visitor):
     
 class Interpreter(Visitor):
     def __init__(self):
-        self.environment = Environment()
+        self.globals = Environment()
+        self.environment = self.globals
+        class ClockCallable(Callable):
+            def arity(self): return 0
+            def call(self, interpreter, arguments):
+                return time.time()
+            def __repr__(self):
+                return "<native clock fn>"
+
+        self.globals.define("clock", ClockCallable())
 
     def interpret(self, stmts):
         try:
@@ -738,6 +780,20 @@ class Interpreter(Visitor):
 
         # Unreachable
         return None
+
+    def visitCallExpr(self, expr):
+        callee = self.evaluate(expr.callee)
+
+        arguments = []
+        for argument in expr.arguments:
+            arguments.append(self.evaluate(argument))
+
+        # if not callee instanceof Callable:
+        #   raise RuntimeException(expr.paren, "Can only call functions and classes."
+        function = callee
+        if len(arguments) != function.arity():
+            raise RuntimeException(expr.paren, "Expected {} arguments, but got {}.".format(function.arity(), arguments.size()))
+        return function.call(self, arguments)
 
     def visitGroupingExpr(self, expr):
         return self.evaluate(expr.expr)
@@ -846,6 +902,11 @@ class Environment(object):
 
     def define(self, name, value):
         self.values[name] = value
+
+class Callable(object):
+    # def call(self, interpreter, arguments): pass
+    # def arity(self): pass
+    pass
 
 def runFile(path: str):
     global hadError, hadRuntimeError
