@@ -168,9 +168,7 @@ class Scanner(object):
             self.advance()
 
         text = self.source[self.start:self.current]
-        type = None
-        if text in self.keywords:
-            type = self.keywords[text]
+        type = self.keywords.get(text)
         if type == None:
             type = TokenType.IDENTIFIER
         self.addToken(type)
@@ -249,6 +247,9 @@ class Variable(Expr):
 
     def accept(self, visitor):
         return visitor.visitVariableExpr(self)
+
+    def __repr__(self):
+        return "<var {}>".format(self.name)
 
 class Literal(Expr):
     def __init__(self, value):
@@ -716,6 +717,7 @@ class AstPrinter(Visitor):
     
 class Interpreter(Visitor):
     def __init__(self):
+        self.locals = {}
         self.globals = Environment()
         self.environment = self.globals
         class ClockCallable(Callable):
@@ -736,6 +738,9 @@ class Interpreter(Visitor):
 
     def execute(self, stmt):
         stmt.accept(self)
+
+    def resolve(self, expr, depth):
+        self.locals[expr] = depth
 
     def executeBlock(self, stmts, environment):
         previous = self.environment
@@ -798,7 +803,12 @@ class Interpreter(Visitor):
 
     def visitAssignExpr(self, expr):
         value = self.evaluate(expr.value)
-        self.environment.assign(expr.name, value)
+
+        distance = self.locals[expr]
+        if distance != None:
+            self.environment.assignAt(distance, expr.name, value)
+        else:
+            self.globals.assign(expr.name, value)
         return value
 
     def visitBinaryExpr(self, expr):
@@ -887,7 +897,14 @@ class Interpreter(Visitor):
         return None
 
     def visitVariableExpr(self, expr):
-        return self.environment.get(expr.name)
+        return self.lookUpVariable(expr.name, expr)
+
+    def lookUpVariable(self, name, expr):
+        distance = self.locals.get(expr)
+        if distance != None:
+            return self.environment.getAt(distance, name.lexeme)
+        else:
+            return self.globals.get(name)
 
     def checkNumberOperand(self, operator, operand):
         if type(operand) == type(0.0):
@@ -930,6 +947,144 @@ class Interpreter(Visitor):
 
         return str(obj)
 
+class Resolver(Visitor):
+    def __init__(self, interpreter):
+        self.interpreter = interpreter
+        self.scopes = []
+
+    def visitBlockStmt(self, stmt):
+        self.beginScope()
+        self.resolve(stmt.stmts)
+        self.endScope()
+        return None
+
+    def visitExpressionStmt(self, stmt):
+        self.resolveExpression(stmt.expr)
+        return None
+
+    def visitFunctionStmt(self, stmt):
+        self.declare(stmt.name)
+        self.define(stmt.name)
+
+        self.resolveFunction(stmt)
+        return None
+
+    def visitIfStmt(self, stmt):
+        self.resolveExpression(stmt.condition)
+        self.resolve(stmt.thenBranch)
+        if stmt.elseBranch:
+            self.resolve(stmt.elseBranch)
+        return None
+
+    def visitPrintStmt(self, stmt):
+        self.resolveExpression(stmt.expr)
+        return None
+
+    def visitReturnStmt(self, stmt):
+        if stmt.value:
+            self.resolveExpression(stmt.value)
+
+        return None
+
+    def visitVarStmt(self, stmt):
+        self.declare(stmt.name)
+        if stmt.initializer != None:
+            self.resolveExpression(stmt.initializer)
+        self.define(stmt.name)
+        return None
+
+    def visitWhileStmt(self, stmt):
+        self.resolveStatement(stmt.condition)
+        self.resolveStatement(stmt.body)
+        return None
+
+    def visitAssignExpr(self, expr):
+        self.resolveExpression(expr.value)
+        self.resolveLocal(expr, expr.name)
+        return None
+
+    def visitBinaryExpr(self, expr):
+        self.resolveExpression(expr.left)
+        self.resolveExpression(expr.right)
+        return None
+
+    def visitCallExpr(self, expr):
+        self.resolveExpression(expr.callee)
+
+        for argument in expr.arguments:
+            self.resolveExpression(argument)
+
+        return None
+
+    def visitGroupingExpr(self, expr):
+        self.resolveExpression(expr.expr)
+        return None
+
+    def visitLiteralExpr(self, expr):
+        return None
+
+    def visitLogicalExpr(self, expr):
+        self.resolveExpression(expr.left)
+        self.resolveExpression(expr.right)
+        return None
+
+    def visitUnaryExpr(self, expr):
+        self.resolveExpression(expr.right)
+        return None
+
+    def visitVariableExpr(self, expr):
+        if len(self.scopes) != 0 and \
+            self.scopes[-1].get(expr.name.lexeme) == False:
+            error(expr.name, "Can't read local variable in its own initializer.")
+
+        self.resolveLocal(expr, expr.name)
+        return None
+
+    def resolve(self, stmts):
+        for stmt in stmts:
+            self.resolveStatement(stmt)
+
+    def resolveStatement(self, stmt):
+        stmt.accept(self)
+
+    def resolveExpression(self, expr):
+        expr.accept(self)
+
+    def resolveFunction(self, function):
+        self.beginScope()
+        for param in function.params:
+            self.declare(param)
+            self.define(param)
+
+        self.resolve(function.body)
+        self.endScope()
+
+    def beginScope(self):
+        self.scopes.append({})
+
+    def endScope(self):
+        self.scopes.pop()
+
+    def declare(self, name):
+        if len(self.scopes) == 0:
+            return
+
+        scope = self.scopes[-1]
+        scope[name.lexeme] = False
+
+    def define(self, name):
+        if len(self.scopes) == 0:
+            return
+
+        scope = self.scopes[-1]
+        scope[name.lexeme] = True
+
+    def resolveLocal(self, expr, name):
+        for i in reversed(range(len(self.scopes))):
+            if name.lexeme in self.scopes[i]:
+                self.interpreter.resolve(expr, len(self.scopes) - 1 - i)
+                return
+
 class RuntimeException(Exception):
     def __init__(self, token, message):
         super().__init__(message)
@@ -967,6 +1122,19 @@ class Environment(object):
 
     def define(self, name, value):
         self.values[name] = value
+
+    def ancestor(self, distance):
+        environment = self
+        for i in range(distance):
+            environment = environment.enclosing
+
+        return environment
+
+    def getAt(self, distance, name):
+        return self.ancestor(distance).values[name]
+
+    def assignAt(self, distance, name, value):
+        self.ancestor(distance).values[name.lexeme] = value
 
 class Callable(object):
     # def call(self, interpreter, arguments): pass
@@ -1021,6 +1189,9 @@ def run(source: str):
 
     if hadError:
         return
+
+    resolver = Resolver(interpreter)
+    resolver.resolve(stmts)
 
     interpreter.interpret(stmts)
 
