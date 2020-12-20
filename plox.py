@@ -290,6 +290,15 @@ class Expression(Stmt):
     def accept(self, visitor):
         return visitor.visitExpressionStmt(self)
 
+class Function(Stmt):
+    def __init__(self, name, params, body):
+        self.name = name
+        self.params = params
+        self.body = body
+
+    def accept(self, visitor):
+        return visitor.visitFunctionStmt(self)
+
 class If(Stmt):
     def __init__(self, condition, thenBranch, elseBranch):
         self.condition = condition
@@ -305,6 +314,14 @@ class Print(Stmt):
 
     def accept(self, visitor):
         return visitor.visitPrintStmt(self)
+
+class Return(Stmt):
+    def __init__(self, keyword, value):
+        self.keyword = keyword
+        self.value = value
+
+    def accept(self, visitor):
+        return visitor.visitReturnStmt(self)
 
 class Var(Stmt):
     def __init__(self, name, initializer):
@@ -335,6 +352,8 @@ class Parser(object):
 
     def declaration(self):
         try:
+            if self.match(TokenType.FUN):
+                return self.function("function")
             if self.match(TokenType.VAR):
                 return self.varDeclaration()
 
@@ -350,6 +369,8 @@ class Parser(object):
             return self.ifStatement()
         if self.match(TokenType.PRINT):
             return self.printStatement()
+        if self.match(TokenType.RETURN):
+            return self.returnStatement()
         if self.match(TokenType.WHILE):
             return self.whileStatement()
         if self.match(TokenType.LEFT_BRACE):
@@ -397,7 +418,7 @@ class Parser(object):
     def ifStatement(self):
         self.consume(TokenType.LEFT_PAREN, "Expect '(' after 'if'.")
         condition = self.expression()
-        self.consume(TokenType.LEFT_PAREN, "Expect ')' after if condition.")
+        self.consume(TokenType.RIGHT_PAREN, "Expect ')' after if condition.")
 
         thenBranch = self.statement()
         elseBranch = None
@@ -410,6 +431,15 @@ class Parser(object):
         value = self.expression()
         self.consume(TokenType.SEMICOLON, "Expect ';' after value.")
         return Print(value)
+
+    def returnStatement(self):
+        keyword = self.previous()
+        value = None
+        if not self.check(TokenType.SEMICOLON):
+            value = self.expression()
+
+        self.consume(TokenType.SEMICOLON, "Expect ';' after return value.")
+        return Return(keyword, value)
 
     def varDeclaration(self):
         name = self.consume(TokenType.IDENTIFIER, "Expect variable name.");
@@ -434,6 +464,24 @@ class Parser(object):
         expr = self.expression()
         self.consume(TokenType.SEMICOLON, "Expect ';' after expression.")
         return Expression(expr)
+
+    def function(self, kind):
+        name = self.consume(TokenType.IDENTIFIER, "Expect {} name.".format(kind))
+        self.consume(TokenType.LEFT_PAREN, "Expect '(' after {} name.".format(kind))
+        parameters = []
+        if not self.check(TokenType.RIGHT_PAREN):
+            while True:
+                if len(parameters) >= 255:
+                    self.error(self.peek(), "Can't have more than 255 parameters.")
+
+                parameters.append(self.consume(TokenType.IDENTIFIER, "Expect parameter name."))
+                if not self.match(TokenType.COMMA):
+                    break
+        self.consume(TokenType.RIGHT_PAREN, "Expect ')' after parameters.")
+
+        self.consume(TokenType.LEFT_BRACE, "Expect '{{' before {} body.".format(kind))
+        body = self.block()
+        return Function(name, parameters, body)
 
     def block(self):
         statements = []
@@ -536,7 +584,7 @@ class Parser(object):
             while True:
                 if len(arguments) >= 255:
                     self.error(self.peek(), "Can't have more than 255 arguments.")
-                arguments.append(self.expression)
+                arguments.append(self.expression())
                 if not self.match(TokenType.COMMA):
                     break
 
@@ -710,6 +758,11 @@ class Interpreter(Visitor):
         self.evaluate(stmt.expr)
         return None
 
+    def visitFunctionStmt(self, stmt):
+        function = LoxFunction(stmt)
+        self.environment.define(stmt.name.lexeme, function)
+        return None
+
     def visitIfStmt(self, stmt):
         if self.isTruthy(self.evaluate(stmt.condition)):
             self.execute(stmt.thenBranch)
@@ -721,6 +774,13 @@ class Interpreter(Visitor):
         value = self.evaluate(stmt.expr)
         print(self.stringify(value))
         return None
+
+    def visitReturnStmt(self, stmt):
+        value = None
+        if stmt.value != None:
+            value = self.evaluate(stmt.value)
+
+        raise ReturnValueException(value)
 
     def visitVarStmt(self, stmt):
         value = None
@@ -872,8 +932,13 @@ class Interpreter(Visitor):
 
 class RuntimeException(Exception):
     def __init__(self, token, message):
-        super.__init__(message)
+        super().__init__(message)
         self.token = token
+
+class ReturnValueException(Exception):
+    def __init__(self, value):
+        super().__init__(self)
+        self.value = value
 
 class Environment(object):
     def __init__(self, enclosing=None):
@@ -887,7 +952,7 @@ class Environment(object):
         if self.enclosing:
             return self.enclosing.get(name)
 
-        return RuntimeException(name, "Undefined variable '{}'".format(name.lexeme))
+        raise RuntimeException(name, "Undefined variable '{}'".format(name.lexeme))
 
     def assign(self, name, value):
         if name.lexeme in self.values:
@@ -907,6 +972,27 @@ class Callable(object):
     # def call(self, interpreter, arguments): pass
     # def arity(self): pass
     pass
+
+class LoxFunction(Callable):
+    def __init__(self, declaration):
+        self.declaration = declaration
+
+    def arity(self):
+        return len(self.declaration.params)
+
+    def call(self, interpreter, arguments):
+        environment = Environment(interpreter.globals)
+        for (i, param) in enumerate(self.declaration.params):
+            environment.define(param.lexeme, arguments[i])
+
+        try:
+            interpreter.executeBlock(self.declaration.body, environment)
+        except ReturnValueException as returnValue:
+            return returnValue.value
+        return None
+
+    def __repr__(self):
+        return "<fn {}>".format(self.declaration.name.lexeme)
 
 def runFile(path: str):
     global hadError, hadRuntimeError
