@@ -947,10 +947,13 @@ class Interpreter(Visitor):
 
         return str(obj)
 
+FunctionType = Enum('FunctionType', 'NONE,FUNCTION')
+
 class Resolver(Visitor):
     def __init__(self, interpreter):
         self.interpreter = interpreter
         self.scopes = []
+        self.currentFunction = FunctionType.NONE
 
     def visitBlockStmt(self, stmt):
         self.beginScope()
@@ -966,13 +969,13 @@ class Resolver(Visitor):
         self.declare(stmt.name)
         self.define(stmt.name)
 
-        self.resolveFunction(stmt)
+        self.resolveFunction(stmt, FunctionType.FUNCTION)
         return None
 
     def visitIfStmt(self, stmt):
         self.resolveExpression(stmt.condition)
         self.resolve(stmt.thenBranch)
-        if stmt.elseBranch:
+        if stmt.elseBranch != None:
             self.resolve(stmt.elseBranch)
         return None
 
@@ -981,7 +984,10 @@ class Resolver(Visitor):
         return None
 
     def visitReturnStmt(self, stmt):
-        if stmt.value:
+        if self.currentFunction == FunctionType.NONE:
+            error(stmt.keyword, "Can't return from top-level code.")
+
+        if stmt.value != None:
             self.resolveExpression(stmt.value)
 
         return None
@@ -1050,7 +1056,10 @@ class Resolver(Visitor):
     def resolveExpression(self, expr):
         expr.accept(self)
 
-    def resolveFunction(self, function):
+    def resolveFunction(self, function, type):
+        enclosingFunction = self.currentFunction
+        self.currentFunction = type
+
         self.beginScope()
         for param in function.params:
             self.declare(param)
@@ -1058,6 +1067,8 @@ class Resolver(Visitor):
 
         self.resolve(function.body)
         self.endScope()
+
+        self.currentFunction = enclosingFunction
 
     def beginScope(self):
         self.scopes.append({})
@@ -1070,6 +1081,8 @@ class Resolver(Visitor):
             return
 
         scope = self.scopes[-1]
+        if name.lexeme in scope:
+            error(name, "Already variable with this name in this scope.")
         scope[name.lexeme] = False
 
     def define(self, name):
@@ -1192,6 +1205,10 @@ def run(source: str):
 
     resolver = Resolver(interpreter)
     resolver.resolve(stmts)
+
+    # Stop if there was resolution error.
+    if hadError:
+        return
 
     interpreter.interpret(stmts)
 
