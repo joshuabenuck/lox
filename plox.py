@@ -759,7 +759,7 @@ class Interpreter(Visitor):
         return None
 
     def visitFunctionStmt(self, stmt):
-        function = LoxFunction(stmt)
+        function = LoxFunction(stmt, self.environment)
         self.environment.define(stmt.name.lexeme, function)
         return None
 
@@ -974,14 +974,15 @@ class Callable(object):
     pass
 
 class LoxFunction(Callable):
-    def __init__(self, declaration):
+    def __init__(self, declaration, closure):
+        self.closure = closure
         self.declaration = declaration
 
     def arity(self):
         return len(self.declaration.params)
 
     def call(self, interpreter, arguments):
-        environment = Environment(interpreter.globals)
+        environment = Environment(self.closure)
         for (i, param) in enumerate(self.declaration.params):
             environment.define(param.lexeme, arguments[i])
 
