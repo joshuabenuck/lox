@@ -284,6 +284,14 @@ class Block(Stmt):
     def accept(self, visitor):
         return visitor.visitBlockStmt(self)
 
+class Class(Stmt):
+    def __init__(self, name, methods):
+        self.name = name
+        self.methods = methods
+
+    def accept(self, visitor):
+        return visitor.visitClassStmt(self)
+
 class Expression(Stmt):
     def __init__(self, expr):
         self.expr = expr
@@ -974,9 +982,9 @@ class Resolver(Visitor):
 
     def visitIfStmt(self, stmt):
         self.resolveExpression(stmt.condition)
-        self.resolve(stmt.thenBranch)
+        self.resolveStatement(stmt.thenBranch)
         if stmt.elseBranch != None:
-            self.resolve(stmt.elseBranch)
+            self.resolveStatement(stmt.elseBranch)
         return None
 
     def visitPrintStmt(self, stmt):
