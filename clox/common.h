@@ -5,6 +5,7 @@
 #include <stddef.h> // NULL
 #include <stdint.h> // uint8_t and friends
 
+#define DEBUG_PRINT_CODE
 #define DEBUG_TRACE_EXECUTION
 
 #endif
