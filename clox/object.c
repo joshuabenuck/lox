@@ -123,7 +123,7 @@ static void printFunction(ObjFunction* function) {
         printf("<script>");
         return;
     }
-    printf("<fn%s>", function->name->chars);
+    printf("<fn %s>", function->name->chars);
 }
 
 void printObject(Value value) {
