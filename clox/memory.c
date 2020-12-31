@@ -105,6 +105,9 @@ static void blackenObject(Obj* object) {
 }
 
 static void freeObject(Obj* object) {
+#ifdef DEBUG_LOG_GC
+    printf("%p free type %d\n", (void*)object, object->type);
+#endif
     switch (object->type) {
         case OBJ_CLOSURE: {
             ObjClosure* closure = (ObjClosure*)object;
@@ -135,9 +138,6 @@ static void freeObject(Obj* object) {
 
 void freeObjects() {
     Obj* object = vm.objects;
-#ifdef DEBUG_LOG_GC
-    printf("%p free type %d\n", (void*)object, object->type);
-#endif
 
     while (object != NULL) {
         Obj* next = object->next;

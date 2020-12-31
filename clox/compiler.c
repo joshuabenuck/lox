@@ -411,7 +411,7 @@ static void binary(bool canAssign) {
     // Remember the operator.
     TokenType operatorType = parser.previous.type;
 
-    // Compiler the right operand.
+    // Compile the right operand.
     ParseRule* rule = getRule(operatorType);
     parsePrecedence((Precedence)(rule->precedence + 1));
 
